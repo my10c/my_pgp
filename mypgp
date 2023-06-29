@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+#
+# BSD 3-Clause License
+#
+# Copyright (c) 2019, © Badassops LLC / Luc Suryo
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#*
+#* File			:	my_pgp
+#*
+#* Description	:	wrapper script for gpg
+#*
+#* Author	:	Luc Suryo <luc@badassops.com>
+#*
+#* Version	:	0.7
+#*
+#* Date		:	jul 27, 2021
+#*
+#* History	:
+#* 		Date:			Author:		Info:
+#*		Apr 4, 1993		LIS			First Release to public
+#*		Nov 3, 2001		LIS			added colors
+#*		May 27, 2006	LIS			added functions
+#*		Jan 15, 2018	LIS			changed to Badassops (hand over)
+#*		Jun 16, 2020	LIS			Added -S, -x and -D flags and rename flags
+#*		Mar 20, 2021	LIS			Added -G (generate) and -E (edit)
+#*		Apr 6, 2021		LIS			Added -V (view)
+#*		Jul 27, 2021	LIS			bug fixed on -p with given value
+#*
+
+_program="${0##*/}"
+_author='Luc Suryo'
+_copyright="Copyright 1993 - $(date "+%Y") (c) Badassops LLC"
+_license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
+_version='0.7'
+_email='luc@badassops.com'
+_summary='Wrapper script for gpg'
+_cancelled="OK : Process has been cancelled on your request."
+_info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
+
+# color :)
+_reset_color='\033[0m'		# Text Reset
+_color_black='\033[1;30m'	# Black bold
+_color_red='\033[1;31m'		# Red bold
+_color_green='\033[1;32m'	# Green bold
+_color_yellow='\033[1;33m'	# Yellow bold
+_color_blue='\033[1;34m'	# Blue bold
+_color_purple='\033[1;35m'	# Purple bold
+_color_cyan='\033[1;36m'	# Cyan bold
+_color_white='\033[1;37m'	# White bold
+
+# working variables
+_echo_flag="-e"
+_my_key='<INSERT YOUR EMAIL HERE>'
+_pub_key_file=${_my_key}.acs
+_the_user=
+_the_file=
+_debug=
+
+# Set interrupt handler
+trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
+
+function inthandler() {
+	clean_up
+	echo $_echo_flag "$_cancelled"
+	exit $_state_ok
+}
+
+function clean_up() {
+	rm -f "$_lockfile" > /dev/null 2>&1
+	return 0
+}
+
+function help() {
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	echo $_echo_flag "$_info"
+	echo $_echo_flag "Usage : $_program [-h] [ option ... ]"
+	echo $_echo_flag " Options:"
+	echo $_echo_flag "   -h this help page."
+	echo $_echo_flag "   -D debug mode, dry-run mode."
+	echo $_echo_flag "   -d value, the file to be decrypted"
+	echo $_echo_flag "   -e value, the file to be encrypted"
+	echo $_echo_flag "   -E value, edit key, modify entries"
+	echo $_echo_flag "   -i value, imported public key from given file"
+	echo $_echo_flag "   -G, interactive generate key"
+	echo $_echo_flag "   -l, list all imported public key or given email address"
+	echo $_echo_flag "   -p save public key in the file $_pub_key_file"
+	echo $_echo_flag "   -r value, recipient, to be use with the -e option"
+	echo $_echo_flag "   -s value, search the given user and import key"
+	echo $_echo_flag "   -S value, sign the key of the given email or key-id"
+	echo $_echo_flag "   -x value, export the public key of the given email or key-id"
+	echo $_echo_flag "   -X value, delete the key of the given email or key-id"
+	echo $_echo_flag "   -v Show version"
+	echo $_echo_flag "   -V value, show given key detail"
+	echo $_echo_flag "\nNotes: during decryption there migth be some error"
+	echo $_echo_flag "that $_color_red could $_reset_color be ignored, so always check the decrypted file"
+	clean_up
+	exit $1
+}
+
+function _check_args() {
+	local _error=0
+	case $1
+	in
+		file)
+			if [[ -z $_the_file ]]; then
+				echo $_echo_flag "\n\t$_color_red $1 was not given $_reset_color"
+				_error=1
+			fi
+			if [[ ! -f $_the_file ]]; then
+				echo $_echo_flag "\n\t$_color_red $1 $_color_yellow $_the_file $_color_red issue $_reset_color"
+				_error=1
+			fi;;
+		user)
+			if [[ -z $_the_user ]]; then
+				echo $_echo_flag "\n\t$_color_red $1 was not given $_reset_color"
+				_error=1
+			fi;;
+	esac
+	(( $_error == 1 )) && help 1
+	return 0
+}
+
+function get_given_options() {
+	while [[ -n "$1" ]]
+	do
+		case "$1" in
+			'-D'|'--debug')		_debug="echo" ; echo $_echo_flag "\n*** $_color_yellow debug mode $_reset_color ***" ;;
+			'-d'|'--decrypt')	_mode+=do_decrypt	; _the_file="$2" ; shift ;;
+			'-e'|'--encryp')	_mode+=do_encrypt	; _the_file="$2" ; shift ;;
+			'-E'|'--edit')		_mode+=do_edit		; _the_user="$2" ; shift ;;
+			'-i'|'--import')	_mode+=do_import	; _the_file="$2" ; shift ;;
+			'-G'|'--generate')	_mode+=do_generate	;;
+			'-l'|'--list')		_mode+=do_list		;
+								if [[ ! -z $2 ]] ; then
+									_the_user=$2
+									shift
+								fi
+								;;
+			'-p'|'--public')	_mode+=do_mypubkey
+								if [[ ! -z $2 ]] ; then
+									_the_user=$2
+									shift
+								fi
+								;;
+			'-r'|'--recipient')						  _the_user="$2" ; shift ;;
+			'-s'|'--search')	_mode+=do_search	; _the_user="$2" ; shift ;;
+			'-S'|'--sign')		_mode+=do_sign		; _the_user="$2" ; shift ;;
+			'-x'|'--export')	_mode+=do_export	; _the_user="$2" ; shift ;;
+			'-X'|'--delete')	_mode+=do_delete	; _the_user="$2" ; shift ;;
+			'-v'|'--version')	echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
+			'-V'|'--view')		_mode+=do_view		; _the_user="$2" ; shift ;;
+			*)					help 0 ;; 	# Which includes -h and --help
+		esac
+		shift
+	done
+	type _${_mode} &>/dev/null
+    (( $? == 0 )) && _${_mode} && return $?
+	help 1
+}
+
+function _do_decrypt() {
+	_check_args file
+	echo $_echo_flag "\n*** $_color_cyan decrypting file $_the_file to $_the_file.dgpg $_reset_color ***"
+	$_debug gpg --decrypt --output "$_the_file".dgpg "$_the_file"
+	return $?
+}
+
+function _do_encrypt() {
+	_check_args user
+	_check_args file
+	echo $_echo_flag "\n*** $_color_cyan encrypting file $_the_file for user $_the_user $_reset_color ***"
+	$_debug gpg --encrypt --recipient $_the_user --armor --output "$_the_file".gpg "$_the_file"
+	return $?
+}
+
+function _do_edit() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan editing the key of $_the_user $_reset_color ***"
+	$_debug gpg --edit-key $_the_user
+	return $?
+}
+
+function _do_import() {
+	_check_args file
+	echo $_echo_flag "\n*** $_color_cyan import file $_the_file $_reset_color ***"
+	$_debug gpg --import $_the_file
+	return $?
+}
+
+function _do_generate() {
+	echo $_echo_flag "\n*** $_color_cyan interactive generate new key  $_reset_color ***"
+	$_debug gpg --full-generate-key
+	return $?
+}
+
+function _do_list() {
+	echo $_echo_flag "\n*** $_color_cyan all known keys $_reset_color ***"
+	$_debug gpg --list-keys $_the_user
+	return $?
+}
+
+function _do_mypubkey() {
+	if [[ -z $_the_user ]] ; then
+		echo $_echo_flag "\n*** $_color_cyan public key saved as $_my_key $_reset_color ***"
+		$_debug gpg --output $_pub_key_file --armor --export $_my_key
+	else
+		echo $_echo_flag "\n*** $_color_cyan public key saved as ${_the_user}.asc $_reset_color ***"
+		$_debug gpg --output ${_the_user}.asc --armor --export $_the_user
+	fi
+	return $?
+}
+
+function _do_search() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan searching user $_the_user $_reset_color ***"
+	$_debug gpg --search-keys $_the_user
+	return $?
+}
+
+function _do_sign() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan signing key $_the_user $_reset_color ***"
+	$_debug gpg --sign-key $_the_user
+	return $?
+}
+
+function _do_export() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan exporting the public key $_the_user $_reset_color ***"
+	$_debug gpg --output "$_the_user".asc -armor --export $_the_user
+	return $?
+}
+
+function _do_delete() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan deleting key $_the_user $_reset_color ***"
+	$_debug gpg --delete-key $_the_user
+	return $?
+}
+
+function _do_view() {
+	_check_args user
+	echo $_echo_flag "\n*** $_color_cyan view key of the user/id $_the_user $_reset_color ***"
+	$_debug gpg --output /tmp/"$_the_user".asc --armor --export $_the_user
+	(( $? != 0 )) && rm /tmp/"$_the_user".asc && return 1
+	$_debug gpg --keyid-format 0xlong /tmp/"$_the_user".asc 2>/dev/null
+	(( $? != 0 )) && rm /tmp/"$_the_user".asc && return 1
+	rm -f /tmp/"$_the_user".asc
+	return 0
+}
+
+function main() {
+	local _var_exit=$_state_ok
+
+	get_given_options $@
+	_var_exit=$?
+
+	clean_up
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	exit $_var_exit
+}
+main $*
